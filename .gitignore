@@ -25,7 +25,7 @@ src/.gradio/flagged/
 # Big images (we keep only optimized gallery & small samples)
 gallery/
 artifacts/
-#optimized_gallery/
+optimized_gallery/
 
 # If you want to keep optimized_gallery for deployment, comment the above line
 # optimized_gallery/
