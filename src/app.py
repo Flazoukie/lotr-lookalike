@@ -1,19 +1,17 @@
-# src/app.py
+# src/app_text.py
 """
-Simple Gradio app:
- - Embeds the uploaded image using the same ResNet backbone
- - Computes cosine similarity to each class centroid (dot product)
- - Returns top-3 matches and the closest gallery example image
+Text-only app that loads from CSV format.
 """
 
 from pathlib import Path
 import numpy as np
+import json
+import csv
 from PIL import Image
 import torch, torch.nn as nn
 import torchvision as tv
 import gradio as gr
 
-from pathlib import Path
 
 # --- backbone (same as embedding script) ---
 def get_backbone(device="cpu"):
@@ -24,24 +22,74 @@ def get_backbone(device="cpu"):
     preprocess = weights.transforms()
     return backbone, preprocess
 
+
 def l2_normalize(x, eps=1e-10):
     return x / (np.linalg.norm(x, axis=1, keepdims=True) + eps)
+
 
 # --- load artifacts ---
 project_root = Path(__file__).resolve().parent.parent
 artifacts = project_root / "artifacts"
 
-G = np.load(artifacts / "gallery_embeddings.npz", allow_pickle=True)
-E = G["embeddings"]            # [N, D], L2-normalized
-paths = [str(p) for p in G["paths"]]
-labels = G["labels"]
-classes = [str(c) for c in G["classes"]]
+print("Loading embeddings from CSV...")
 
-C = np.load(artifacts / "centroids.npz", allow_pickle=True)
-centroids = C["centroids"]     # [K, D], L2-normalized
+# Load embeddings metadata
+with open(artifacts / "embeddings_metadata.json", "r") as f:
+    emb_metadata = json.load(f)
+
+# Load embeddings from CSV
+embeddings = []
+labels = []
+paths = []
+
+with open(artifacts / "embeddings.csv", "r") as f:
+    reader = csv.reader(f)
+    header = next(reader)  # Skip header
+
+    for row in reader:
+        path = row[0]
+        label = int(row[1])
+        embedding = [float(x) for x in row[2:]]
+
+        # Convert absolute path to relative path for cross-platform compatibility
+        if 'optimized_gallery' in path:
+            # Extract just the part after 'optimized_gallery'
+            rel_path = 'optimized_gallery' + path.split('optimized_gallery')[1].replace('\\', '/')
+            path = str(project_root / rel_path)
+
+        paths.append(path)
+        labels.append(label)
+        embeddings.append(embedding)
+
+# Convert to numpy arrays
+E = np.array(embeddings, dtype=np.float32)
+labels = np.array(labels, dtype=np.int32)
+classes = emb_metadata["classes"]
+
+print("Loading centroids from CSV...")
+
+# Load centroids from CSV
+centroids = []
+centroid_classes = []
+
+with open(artifacts / "centroids.csv", "r") as f:
+    reader = csv.reader(f)
+    header = next(reader)  # Skip header
+
+    for row in reader:
+        class_name = row[0]
+        centroid = [float(x) for x in row[1:]]
+
+        centroid_classes.append(class_name)
+        centroids.append(centroid)
+
+centroids = np.array(centroids, dtype=np.float32)
+
+print(f"Loaded {len(embeddings)} embeddings and {len(centroids)} centroids")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 backbone, preprocess = get_backbone(device)
+
 
 def to_embedding(img: Image.Image):
     # returns a 1D numpy L2-normalized embedding
@@ -51,9 +99,10 @@ def to_embedding(img: Image.Image):
         feat = backbone(x).squeeze().cpu().numpy().reshape(1, -1)
     return l2_normalize(feat)[0]
 
+
 def predict(img: Image.Image):
-    emb = to_embedding(img)    # [D]
-    sims = centroids @ emb     # [K]
+    emb = to_embedding(img)  # [D]
+    sims = centroids @ emb  # [K]
     idx = np.argsort(-sims)[:3]
     top = {classes[i]: float(sims[i]) for i in idx}
 
@@ -77,7 +126,6 @@ def predict(img: Image.Image):
     return top, nn_abs_img, nn_top_img, verdict
 
 
-
 demo = gr.Interface(
     fn=predict,
     inputs=gr.Image(type="pil", label="Upload a face or character image"),
@@ -90,7 +138,6 @@ demo = gr.Interface(
     title="Which LOTR character are you?",
     description="Matches your image to LOTR characters using image embeddings."
 )
-
 
 if __name__ == "__main__":
     demo.launch(share=False)
